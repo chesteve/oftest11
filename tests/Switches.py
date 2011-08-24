@@ -41,6 +41,7 @@ class OFReferenceSwitch(OFSwitch):
 
     def __init__(self,interfaces,config):
         super(OFReferenceSwitch, self).__init__(interfaces, config)
+        self.config = config  
         if config.of_dir:
             self.of_dir = os.path.normpath(config.of_dir)
         else:
@@ -48,7 +49,7 @@ class OFReferenceSwitch(OFSwitch):
         self.ofd = os.path.normpath(self.of_dir + "/udatapath/ofdatapath")
         self.ofp = os.path.normpath(self.of_dir + "/secchan/ofprotocol")
         self.ofd_op = None
-
+    
     def test(self):
         if not OFSwitch.test(self):
             return False
@@ -71,12 +72,14 @@ class OFReferenceSwitch(OFSwitch):
         subprocess.call([self.ofp, "unix:/tmp/ofd", 
                 "tcp:%s:%d" % (self.config.controller_host, self.config.port),
                 "--fail=closed", "--max-backoff=1"])
-
+        #shell=True) to deal with permission exceptions
+        
     def stop(self):
         if self.ofd_op:
             print "Killing ofdatapath on pid: %d" % (self.ofd_op.pid)
             os.kill(self.ofd_op.pid,signal.SIGTERM)
             #self.ofd_op.kill()   ### apparently Popen.kill() requires python 2.6
+            
 
 class OFPS(OFSwitch):
     """
@@ -126,4 +129,3 @@ MAP = {
     "none" : OFSwitch,
     "reference" : OFReferenceSwitch,
     }
-    
