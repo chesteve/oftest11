@@ -124,8 +124,56 @@ class OFPS(OFSwitch):
     def stop(self):
         pass
 
+#chesteve: OF1.1 rewerence switch start
+class OFReferenceSwitch11(OFSwitch):
+    """
+    Start up Ericsson/OpenFlow reference switch 11
+    """
+
+    Name="reference11"
+
+    def __init__(self,interfaces,config):
+        super(OFReferenceSwitch11, self).__init__(interfaces, config)
+        if config.of_dir:
+            self.of_dir = os.path.normpath(config.of_dir)
+        else:
+            self.of_dir = os.path.normpath("../../of11softswitch")
+        self.ofd = os.path.normpath(self.of_dir + "/udatapath/ofdatapath")
+        self.ofp = os.path.normpath(self.of_dir + "/secchan/ofprotocol")
+        self.ofd_op = None
+	self.config = config
+
+    def test(self):
+        if not OFSwitch.test(self):
+            return False
+
+        if not os.path.exists(self.ofd):
+            print "Could not find datapath daemon: " + self.ofd
+            return False
+
+        if not os.path.exists(self.ofp):
+            print "Could not find protocol daemon: " + self.ofp
+            return False
+
+        return True
+
+    def start(self):
+        ints = ','.join(self.interfaces)
+        self.ofd_op = subprocess.Popen([self.ofd, "-i", ints, "punix:/tmp/ofd"])
+        print "Started ofdatapath on IFs " + ints + \
+                    " with pid " + str(self.ofd_op.pid)        
+        subprocess.call([self.ofp, "unix:/tmp/ofd", 
+                "tcp:%s:%d" % (self.config.controller_host, self.config.port), "--max-backoff=1"])
+
+    def stop(self):
+        if self.ofd_op:
+            print "Killing ofdatapath on pid: %d" % (self.ofd_op.pid)
+            os.kill(self.ofd_op.pid,signal.SIGTERM)
+            #self.ofd_op.kill()   ### apparently Popen.kill() requires python 2.6
+
 MAP = {
     "ofps" : OFPS,
     "none" : OFSwitch,
     "reference" : OFReferenceSwitch,
+    "reference11" : OFReferenceSwitch11,
     }

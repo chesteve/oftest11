@@ -36,7 +36,7 @@ def parse_args():
                       action="store_true")
     parser.add_option("-N", "--no_wait", action="store_true",
                       help="Do not wait to start daemons")
-    parser.add_option("-s","--switch",help="Which OpenFlow Switch to run: 'reference', 'ofps', 'ovs'")
+    parser.add_option("-s","--switch",help="Which OpenFlow Switch to run: 'reference', 'ofps', 'ovs', 'reference11'")
     parser.add_option("-w","--wait",type="int",
                       help="Duration to wait before starting daemons")
     (options, args) = parser.parse_args()
