@@ -5,8 +5,8 @@ foo.txt
 *.html
 # except foo.html which is maintained by hand.
 !foo.html
-# Ignore objects and archives.
-*.[oa]
+# Ignore log files.
+*.log
 # Ignore pyc objects
 *.pyc
 
