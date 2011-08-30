@@ -26,6 +26,8 @@ import oftest.action as action
 import oftest.parse as parse
 import oftest.instruction as instruction
 import basic
+import pktact
+#import oftest.controller as controller
 
 import testutils
 
@@ -37,6 +39,10 @@ except:
         import scapy as scapy
     except:
         sys.exit("Need to install scapy for packet parsing")
+        
+        
+import os.path
+import subprocess
 
 #@var port_map Local copy of the configuration map from OF port
 # numbers to OS interfaces
@@ -89,7 +95,7 @@ def test_set_init(config):
     pa_config = config
 
 # chesteve: IPv6 packet gen
-def simple_ipv6_packet(pktlen=100, 
+def simple_ipv6_packet(pktlen=1000, 
                       dl_dst='00:01:02:03:04:05',
                       dl_src='00:06:07:08:09:0a',
                       dl_vlan_enable=False,
@@ -134,7 +140,8 @@ def simple_ipv6_packet(pktlen=100,
     else:
         pkt = scapy.Ether(dst=dl_dst, src=dl_src)/ \
             scapy.IPv6(src=ip_src, dst=ip_dst)
-    
+ 
+    # Add IPv6 Extension Headers 
     if EH:
         pkt = pkt / EHpkt
         
@@ -148,18 +155,68 @@ def simple_ipv6_packet(pktlen=100,
     
      
 # TESTS
-#class PacketOnly(basic.DataPlaneOnly):
-#    """
-#    Just send a packet thru the switch
-#    """
-#    def runTest(self):
-#        pkt = testutils.simple_tcp_packet()
-#        of_ports = pa_port_map.keys()
-#        of_ports.sort()
-#        ing_port = of_ports[0]
-#        pa_logger.info("Sending IPv4 packet to " + str(ing_port))
-#        pa_logger.debug("Data: " + str(pkt).encode('hex'))
-#        self.dataplane.send(ing_port, str(pkt))
+class PacketOnlyIPv4(basic.SimpleDataPlane):
+    """
+    Just send a packet IPv4 / TCP thru the switch
+    """
+    def runTest(self):
+        pkt = testutils.simple_tcp_packet()
+
+        self.of_dir = os.path.normpath("../../of11softswitch")
+        self.ofd = os.path.normpath(self.of_dir + "/udatapath/ofdatapath")
+        self.dpctl = os.path.normpath(self.of_dir + "/utilities/dpctl")
+        dpctl_switch = "unix:/tmp/ofd"
+        
+        # Remove all entries Add entry match all
+        # sudo ./dpctl unix:/tmp/ofd flow-mod cmd=del,table=0
+#        flow_cmd1 = "flow-mod"
+#        flow_cmd2 = "cmd=del,table=0"
+#        pcall = [self.dpctl, dpctl_switch, flow_cmd1, flow_cmd2]
+#        subprocess.call(pcall)  
+        
+        rc = testutils.delete_all_flows(self.controller, pa_logger)
+        self.assertEqual(rc, 0, "Failed to delete all flows")
+
+        # Add entry match all
+        flow_cmd1 = "flow-mod"
+        flow_cmd2 = "cmd=add,table=0,idle=100"
+        flow_match = "wildcards=+all" #, -in_port-dl_type,in_port=1,dl_type=2048in_port=0  wildcards=0xffff
+        flow_acts = "apply:output=2"
+        
+        pcall = [self.dpctl, dpctl_switch, flow_cmd1, flow_cmd2, flow_match,  flow_acts]
+        print pcall
+        subprocess.call(pcall)
+
+        of_ports = pa_port_map.keys()
+        of_ports.sort()
+        ing_port = of_ports[0]
+        pa_logger.info("Sending IPv4 packet to " + str(ing_port))
+        pa_logger.debug("Data: " + str(pkt).encode('hex'))
+        self.dataplane.send(ing_port, str(pkt))
+      
+        pa_logger.debug("Request stats-flow")  
+        pcall = [self.dpctl, dpctl_switch, "stats-flow"]  #  
+        subprocess.call(pcall)
+        
+#        pa_logger.debug("Request stats-table")  
+#        pcall = [self.dpctl, dpctl_switch, "stats-table"]  #  stats-flow
+#        subprocess.call(pcall)
+
+class AllWildcardMatchIPv6(pktact.BaseMatchCase):
+    """
+    Create Wildcard-all flow and exercise for all ports
+
+    Generate a packet
+    Generate and install a matching flow with wildcard-all
+    Add action to forward to a port
+    Send the packet to the port
+    Verify the packet is received at all other ports (one port at a time)
+    Verify flow_expiration message is correct when command option is set
+    """
+    def runTest(self):
+        print "skip"
+       # testutils.flow_match_test(self, pa_port_map, wildcards=ofp.OFPFW_ALL)
+
 
 class PacketOnlyIPv6(basic.DataPlaneOnly):
     """
