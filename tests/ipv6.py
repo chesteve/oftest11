@@ -39,8 +39,8 @@ except:
         import scapy as scapy
     except:
         sys.exit("Need to install scapy for packet parsing")
-        
-        
+
+
 import os.path
 import subprocess
 
@@ -140,154 +140,202 @@ def simple_ipv6_packet(pktlen=1000,
     else:
         pkt = scapy.Ether(dst=dl_dst, src=dl_src)/ \
             scapy.IPv6(src=ip_src, dst=ip_dst)
- 
+
     # Add IPv6 Extension Headers 
     if EH:
         pkt = pkt / EHpkt
-        
+
     if (tcp_sport >0 and tcp_dport >0):
         pkt = pkt / scapy.TCP(sport=tcp_sport, dport=tcp_dport)
 
     pktlen = len(pkt) # why??
     pkt = pkt/("D" * (pktlen - len(pkt)))
-    
+
     return pkt
-    
-     
+
+
 # TESTS
 class PacketOnlyIPv4(basic.SimpleDataPlane):
     """
     Just send a packet IPv4 / TCP thru the switch
     """
     def runTest(self):
-        pkt = testutils.simple_tcp_packet()
-
+        
+        of_ports = pa_port_map.keys()
+        of_ports.sort()
+        ing_port = of_ports[0]
+        egr_port =   of_ports[2]
+        
         self.of_dir = os.path.normpath("../../of11softswitch")
         self.ofd = os.path.normpath(self.of_dir + "/udatapath/ofdatapath")
         self.dpctl = os.path.normpath(self.of_dir + "/utilities/dpctl")
         dpctl_switch = "unix:/tmp/ofd"
-        
+
         # Remove all entries Add entry match all
         # sudo ./dpctl unix:/tmp/ofd flow-mod cmd=del,table=0
 #        flow_cmd1 = "flow-mod"
 #        flow_cmd2 = "cmd=del,table=0"
 #        pcall = [self.dpctl, dpctl_switch, flow_cmd1, flow_cmd2]
 #        subprocess.call(pcall)  
-        
+
         rc = testutils.delete_all_flows(self.controller, pa_logger)
         self.assertEqual(rc, 0, "Failed to delete all flows")
 
         # Add entry match all
         flow_cmd1 = "flow-mod"
         flow_cmd2 = "cmd=add,table=0,idle=100"
-        flow_match = "wildcards=+all" #, -in_port-dl_type,in_port=1,dl_type=2048in_port=0  wildcards=0xffff
-        flow_acts = "apply:output=2"
-        
+        flow_match = "wildcards=+all,dl_src_mask=FF:FF:FF:FF:FF:FF,dl_dst_mask=FF:FF:FF:FF:FF:FF,nw_src_mask=255.255.255.255,nw_dst_mask=255.255.255.255" #, -in_port,in_port=1,dl_type=2048in_port=0  wildcards=0xffff
+        flow_acts = "apply:output=" + str(egr_port)
+
         pcall = [self.dpctl, dpctl_switch, flow_cmd1, flow_cmd2, flow_match,  flow_acts]
         print pcall
         subprocess.call(pcall)
 
-        of_ports = pa_port_map.keys()
-        of_ports.sort()
-        ing_port = of_ports[0]
+        #Send packet
+        pkt = testutils.simple_tcp_packet()
         pa_logger.info("Sending IPv4 packet to " + str(ing_port))
         pa_logger.debug("Data: " + str(pkt).encode('hex'))
         self.dataplane.send(ing_port, str(pkt))
-      
+        
+        #Receive packet
+        exp_pkt = testutils.simple_tcp_packet()
+        testutils.receive_pkt_verify(self, egr_port, exp_pkt)
+
+        #See flow match
         pa_logger.debug("Request stats-flow")  
         pcall = [self.dpctl, dpctl_switch, "stats-flow"]  #  
         subprocess.call(pcall)
         
+        #Remove flows
+        rc = testutils.delete_all_flows(self.controller, pa_logger)
+        self.assertEqual(rc, 0, "Failed to delete all flows")
+
 #        pa_logger.debug("Request stats-table")  
 #        pcall = [self.dpctl, dpctl_switch, "stats-table"]  #  stats-flow
 #        subprocess.call(pcall)
 
-class AllWildcardMatchIPv6(pktact.BaseMatchCase):
+class AllWildcardMatchIPv4(basic.SimpleDataPlane):
     """
-    Create Wildcard-all flow and exercise for all ports
-
-    Generate a packet
-    Generate and install a matching flow with wildcard-all
-    Add action to forward to a port
-    Send the packet to the port
-    Verify the packet is received at all other ports (one port at a time)
-    Verify flow_expiration message is correct when command option is set
+    Just match an IPv4 packet thru the switch
     """
     def runTest(self):
-        print "skip"
-       # testutils.flow_match_test(self, pa_port_map, wildcards=ofp.OFPFW_ALL)
+        rc = testutils.delete_all_flows(self.controller, pa_logger)
+        self.assertEqual(rc, 0, "Failed to delete all flows")
+        pkt = testutils.simple_tcp_packet()
+        testutils.flow_match_test(self, pa_port_map, pkt=pkt,  wildcards=ofp.OFPFW_ALL, max_test =1)
 
+#class AllWildcardMatchIPv6(pktact.BaseMatchCase):
+#    """
+#    Create Wildcard-all flow and exercise for all ports
+#
+#    Generate a packet
+#    Generate and install a matching flow with wildcard-all
+#    Add action to forward to a port
+#    Send the packet to the port
+#    Verify the packet is received at all other ports (one port at a time)
+#    Verify flow_expiration message is correct when command option is set
+#    """
+#    def runTest(self):
+#        print "skip"
+#       # testutils.flow_match_test(self, pa_port_map, wildcards=ofp.OFPFW_ALL)
+#
+#def flow_match_test(parent, port_map, match=None, wildcards=0,
+#                    mask=None, dl_vlan=-1, pkt=None,
+#                    exp_pkt=None, apply_action_list=None,
+#                    check_expire=False,  max_test=0):
+    """
+    Run flow_match_test_port_pair on all port pairs
 
-class PacketOnlyIPv6(basic.DataPlaneOnly):
+    @param max_test If > 0 no more than this number of tests are executed.
+    @param parent Must implement controller, dataplane, assertTrue, assertEqual
+    and logger
+    @param pkt If not None, use this packet for ingress
+    @param match If not None, use this value in flow_mod
+    @param wildcards For flow match entry
+    @param mask DL/NW address bit masks as a dictionary. If set, it is tested
+    against the corresponding match fields with the opposite values
+    @param dl_vlan If not -1, and pkt is None, create a pkt w/ VLAN tag
+    @param exp_pkt If not None, use this as the expected output pkt; els use pkt
+    @param action_list Additional actions to add to flow mod
+    @param check_expire Check for flow expiration message
+    """
+
+class PacketOnlyIPv6(basic.SimpleDataPlane):
     """
     Just send an IPv6 packet thru the switch
     """
     def runTest(self):
+        rc = testutils.delete_all_flows(self.controller, pa_logger)
+        self.assertEqual(rc, 0, "Failed to delete all flows")
         
         pkt = simple_ipv6_packet()
+        
         of_ports = pa_port_map.keys()
         of_ports.sort()
         ing_port = of_ports[0]
         pa_logger.info("Sending IPv6 packet to " + str(ing_port))
         pa_logger.debug("Data: " + str(pkt).encode('hex'))
         self.dataplane.send(ing_port, str(pkt))
-
-class PacketOnlyIPv6TCP(basic.DataPlaneOnly):
-    """
-    Just send an IPv6 packet with TCP ports thru the switch
-    """
-    def runTest(self):
         
-        pkt = simple_ipv6_packet( tcp_sport=80, tcp_dport=8080)
-        of_ports = pa_port_map.keys()
-        of_ports.sort()
-        ing_port = of_ports[0]
-        pa_logger.info("Sending IPv6 packet with TCP to " + str(ing_port))
-        pa_logger.debug("Data: " + str(pkt).encode('hex'))
-        self.dataplane.send(ing_port, str(pkt))
+        rc = testutils.delete_all_flows(self.controller, pa_logger)
+        self.assertEqual(rc, 0, "Failed to delete all flows")
 
-class PacketOnlyIPv6HBH(basic.DataPlaneOnly):
-    """
-    Just send an IPv6 packet with Hop-by-Hop EH thru the switch
-    """
-    def runTest(self):
-        
-        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrHopByHop()) 
-        of_ports = pa_port_map.keys()
-        of_ports.sort()
-        ing_port = of_ports[0]
-        pa_logger.info("Sending IPv6 packet with Hop-by-Hop EH to " + str(ing_port))
-        pa_logger.debug("Data: " + str(pkt).encode('hex'))
-        self.dataplane.send(ing_port, str(pkt))
-
-
-class PacketOnlyIPv6DO(basic.DataPlaneOnly):
-    """
-    Just send an IPv6 packet with DO EH thru the switch
-    """
-    def runTest(self):
-        
-        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrDestOpt()) 
-        of_ports = pa_port_map.keys()
-        of_ports.sort()
-        ing_port = of_ports[0]
-        pa_logger.info("Sending IPv6 packet with DOEH to " + str(ing_port))
-        pa_logger.debug("Data: " + str(pkt).encode('hex'))
-        self.dataplane.send(ing_port, str(pkt))
-
-class PacketOnlyIPv6HBHandDO(basic.DataPlaneOnly):
-    """
-    Just send an IPv6 packet with HBHandDO EHs thru the switch
-    """
-    def runTest(self):
-        
-        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrHopByHop()/scapy.IPv6ExtHdrDestOpt()) 
-        of_ports = pa_port_map.keys()
-        of_ports.sort()
-        ing_port = of_ports[0]
-        pa_logger.info("Sending IPv6 packet with HBHandDO EHs to " + str(ing_port))
-        pa_logger.debug("Data: " + str(pkt).encode('hex'))
-        self.dataplane.send(ing_port, str(pkt))
+#class PacketOnlyIPv6TCP(basic.DataPlaneOnly):
+#    """
+#    Just send an IPv6 packet with TCP ports thru the switch
+#    """
+#    def runTest(self):
+#        
+#        pkt = simple_ipv6_packet( tcp_sport=80, tcp_dport=8080)
+#        of_ports = pa_port_map.keys()
+#        of_ports.sort()
+#        ing_port = of_ports[0]
+#        pa_logger.info("Sending IPv6 packet with TCP to " + str(ing_port))
+#        pa_logger.debug("Data: " + str(pkt).encode('hex'))
+#        self.dataplane.send(ing_port, str(pkt))
+#
+#class PacketOnlyIPv6HBH(basic.DataPlaneOnly):
+#    """
+#    Just send an IPv6 packet with Hop-by-Hop EH thru the switch
+#    """
+#    def runTest(self):
+#        
+#        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrHopByHop()) 
+#        of_ports = pa_port_map.keys()
+#        of_ports.sort()
+#        ing_port = of_ports[0]
+#        pa_logger.info("Sending IPv6 packet with Hop-by-Hop EH to " + str(ing_port))
+#        pa_logger.debug("Data: " + str(pkt).encode('hex'))
+#        self.dataplane.send(ing_port, str(pkt))
+#
+#
+#class PacketOnlyIPv6DO(basic.DataPlaneOnly):
+#    """
+#    Just send an IPv6 packet with DO EH thru the switch
+#    """
+#    def runTest(self):
+#        
+#        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrDestOpt()) 
+#        of_ports = pa_port_map.keys()
+#        of_ports.sort()
+#        ing_port = of_ports[0]
+#        pa_logger.info("Sending IPv6 packet with DOEH to " + str(ing_port))
+#        pa_logger.debug("Data: " + str(pkt).encode('hex'))
+#        self.dataplane.send(ing_port, str(pkt))
+#
+#class PacketOnlyIPv6HBHandDO(basic.DataPlaneOnly):
+#    """
+#    Just send an IPv6 packet with HBHandDO EHs thru the switch
+#    """
+#    def runTest(self):
+#        
+#        pkt = simple_ipv6_packet(EH = True,  EHpkt = scapy.IPv6ExtHdrHopByHop()/scapy.IPv6ExtHdrDestOpt()) 
+#        of_ports = pa_port_map.keys()
+#        of_ports.sort()
+#        ing_port = of_ports[0]
+#        pa_logger.info("Sending IPv6 packet with HBHandDO EHs to " + str(ing_port))
+#        pa_logger.debug("Data: " + str(pkt).encode('hex'))
+#        self.dataplane.send(ing_port, str(pkt))
 
 
 
